@@ -1,0 +1,283 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                   String    @id @default(cuid())
+  clerkId              String    @unique
+  email                String    @unique
+  name                 String?
+  verifiedPhone        String?
+  phoneVerifiedAt      DateTime?
+  googleCalendarTokens String?   // AES-256 encrypted JSON
+  vapiPhoneNumberId    String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  campaigns    Campaign[]
+  contactLists ContactList[]
+  dailyReports DailyReport[]
+}
+
+model Campaign {
+  id              String         @id @default(cuid())
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name            String
+  description     String?
+  status          CampaignStatus @default(DRAFT)
+  objective       String         @default("")
+  targetAudience  String?
+  talkingPoints   Json           @default("[]")
+  agentConfig     Json           @default("{}")
+  script          String         @default("")
+  vapiAssistantId String?
+  scheduledAt     DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  contacts     ContactList[]
+  calls        Call[]
+  chatMessages ChatMessage[]
+  followUps    FollowUp[]
+  dailyReports DailyReport[]
+}
+
+enum CampaignStatus {
+  DRAFT
+  CONFIGURED
+  RUNNING
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+model ContactList {
+  id         String     @id @default(cuid())
+  campaignId String
+  campaign   Campaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String
+  sourceType SourceType
+  createdAt  DateTime   @default(now())
+
+  contacts Contact[]
+}
+
+enum SourceType {
+  GOOGLE_MAPS
+  CSV_UPLOAD
+  MANUAL
+}
+
+model Contact {
+  id            String      @id @default(cuid())
+  contactListId String
+  contactList   ContactList @relation(fields: [contactListId], references: [id], onDelete: Cascade)
+  name          String?
+  businessName  String?
+  phone         String
+  email         String?
+  address       String?
+  website       String?
+  placeId       String?
+  customFields  Json?
+  disposition   Disposition @default(PENDING)
+  assignedTo    String?     // userId of sales rep assigned to this lead
+  confirmedAt   DateTime?
+  convertedAt   DateTime?
+  createdAt     DateTime    @default(now())
+
+  calls     Call[]
+  followUps FollowUp[]
+
+  @@unique([contactListId, phone])
+}
+
+enum Disposition {
+  PENDING
+  CALLED
+  INTERESTED
+  NOT_INTERESTED
+  VOICEMAIL
+  NO_ANSWER
+  DNC
+  CALLBACK_REQUESTED
+  CONFIRMED   // agreed to cooperate, assigned to sales team
+  CONVERTED   // deal closed / registration complete
+}
+
+model Call {
+  id          String      @id @default(cuid())
+  campaignId  String
+  campaign    Campaign    @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contactId   String
+  contact     Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  vapiCallId  String?     @unique
+  status      CallStatus  @default(QUEUED)
+  duration    Int?
+  startedAt   DateTime?
+  endedAt     DateTime?
+  endReason   String?
+  disposition Disposition @default(PENDING)
+  costCents   Int?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  recording   Recording?
+  transcript  Transcript?
+  summary     CallSummary?
+  appointment Appointment?
+  followUps   FollowUp[]
+}
+
+enum CallStatus {
+  QUEUED
+  RINGING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  BUSY
+  NO_ANSWER
+}
+
+model Recording {
+  id           String   @id @default(cuid())
+  callId       String   @unique
+  call         Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
+  vapiUrl      String?
+  s3Key        String?
+  s3Url        String?
+  durationSecs Int?
+  sizeBytes    Int?
+  createdAt    DateTime @default(now())
+}
+
+model Transcript {
+  id             String   @id @default(cuid())
+  callId         String   @unique
+  call           Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
+  rawText        String
+  translatedText String?
+  language       String?
+  messages       Json     @default("[]")
+  createdAt      DateTime @default(now())
+}
+
+model CallSummary {
+  id            String   @id @default(cuid())
+  callId        String   @unique
+  call          Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
+  summary       String
+  keyPoints     Json     @default("[]")
+  sentiment     String?
+  nextAction    String?
+  extractedData Json?
+  createdAt     DateTime @default(now())
+}
+
+model Appointment {
+  id               String   @id @default(cuid())
+  callId           String   @unique
+  call             Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
+  googleEventId    String?  @unique
+  googleCalendarId String?
+  title            String
+  description      String?
+  startTime        DateTime
+  endTime          DateTime
+  attendeeEmail    String?
+  attendeeName     String?
+  meetingLink      String?
+  status           String   @default("confirmed")
+  createdAt        DateTime @default(now())
+}
+
+// ── Follow-up tracking (email / SMS after call) ───────────────────────────────
+model FollowUp {
+  id           String          @id @default(cuid())
+  contactId    String
+  contact      Contact         @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  campaignId   String
+  campaign     Campaign        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  callId       String?
+  call         Call?           @relation(fields: [callId], references: [id])
+  channel      FollowUpChannel
+  status       FollowUpStatus  @default(PENDING)
+  subject      String?         // email subject
+  content      String          // message body
+  sentAt       DateTime?
+  repliedAt    DateTime?
+  replyContent String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+}
+
+enum FollowUpChannel {
+  EMAIL
+  SMS
+}
+
+enum FollowUpStatus {
+  PENDING
+  SENT
+  REPLIED
+  FAILED
+  SKIPPED
+}
+
+// ── Daily review reports ──────────────────────────────────────────────────────
+model DailyReport {
+  id                 String    @id @default(cuid())
+  userId             String
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  campaignId         String?
+  campaign           Campaign? @relation(fields: [campaignId], references: [id])
+  reportDate         DateTime  @db.Date
+  totalCalls         Int       @default(0)
+  connectedCalls     Int       @default(0)
+  interestedCount    Int       @default(0)
+  notInterestedCount Int       @default(0)
+  voicemailCount     Int       @default(0)
+  noAnswerCount      Int       @default(0)
+  callbackCount      Int       @default(0)
+  confirmedCount     Int       @default(0)
+  convertedCount     Int       @default(0)
+  followUpsSent      Int       @default(0)
+  costCents          Int       @default(0)
+  connectionRate     Float     @default(0)
+  interestRate       Float     @default(0)
+  insights           Json      @default("[]") // Claude-generated text bullets
+  recommendations    Json      @default("[]") // Claude-generated action items
+  rawStats           Json?
+  createdAt          DateTime  @default(now())
+
+  @@unique([userId, campaignId, reportDate])
+}
+
+model ChatMessage {
+  id         String   @id @default(cuid())
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  role       String
+  content    String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+}
+
+model ProcessedWebhookEvent {
+  id          String   @id @default(cuid())
+  vapiCallId  String
+  eventType   String
+  processedAt DateTime @default(now())
+
+  @@unique([vapiCallId, eventType])
+}
