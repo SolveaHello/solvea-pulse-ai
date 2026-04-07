@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Phone, LayoutDashboard, Megaphone, Settings, Users, BarChart2, Mail } from "lucide-react";
+import { Phone, LayoutDashboard, Megaphone, Settings, Users, BarChart2, Mail, UserCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export default function DashboardLayout({
@@ -27,6 +27,15 @@ export default function DashboardLayout({
           </NavItem>
           <NavItem href="/campaigns" icon={<Megaphone className="h-4 w-4" />}>
             Campaigns
+          </NavItem>
+
+          <div className="pt-3 pb-1">
+            <p className="px-3 text-xs font-medium text-muted-foreground/60 uppercase tracking-wider">
+              User Operations
+            </p>
+          </div>
+          <NavItem href="/audience" icon={<UserCircle2 className="h-4 w-4" />}>
+            RFM Audience
           </NavItem>
 
           <div className="pt-3 pb-1">
@@ -83,10 +92,17 @@ function NavItem({
   icon: React.ReactNode;
   children: React.ReactNode;
 }) {
+  const pathname = usePathname();
+  const isActive = href === "/" ? pathname === "/" : pathname.startsWith(href);
   return (
     <Link
       href={href}
-      className="flex items-center gap-3 px-3 py-2 rounded-md text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+      className={cn(
+        "flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors",
+        isActive
+          ? "bg-accent text-foreground font-medium"
+          : "text-muted-foreground hover:bg-accent hover:text-foreground"
+      )}
     >
       {icon}
       {children}

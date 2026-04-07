@@ -1,4 +1,4 @@
-# Pulse AI — 营销流程全景设计
+# Pulse AI — AI 驱动客户全生命周期管理平台
 
 > **系统**：Pulse AI — AI 驱动客户全生命周期管理平台
 > **定位**：实时感知每一个客户的活跃状态、意向强度与价值变化，在正确时机用正确方式触达
@@ -96,6 +96,7 @@ AI 解析意图 → 展示 MapSearchCard 组件
 - 电话号码统一标准化为 E.164 格式（`+1XXXXXXXXXX`）
 - 同一 Campaign 内同一电话只保留一条（`@@unique([contactListId, phone])`）
 - DNC 名单中的号码自动过滤，不写入 ContactList
+- **法国号码特殊规则**：Vapi 对国际 E.164 号码会去掉本地前导 `0`，但法国号码（`+33`）国家码后的 `0` 必须保留。系统在传入 Vapi 前强制校验：法国号码应为 13 位（`+33` + 10 位），若收到标准 E.164 的 12 位格式（`+33` + 9 位），自动补回前导 `0`，确保格式为 `+330XXXXXXXXX`（如 `+330671950548`）
 
 ---
 
@@ -716,17 +717,17 @@ AudienceUser (Line B 新增)               ← 存量用户
 | **Phase 3** | CONVERTED 线索重新分配（Reassign） | A | ✅ 完成 |
 | **Phase 3** | Campaign 详情页（概览 + 通话记录列表） | A | ✅ 完成 |
 | **Phase 3** | 通话详情展开（录音 + 转录 + 挂断原因） | A | ✅ 完成 |
-| **Phase 4** | 邮件回复 Webhook 解析 + AI 自动建议 | A | ⬜ 待建 |
-| **Phase 4** | UTM 注册链接生成 + 事件回传 | A | ⬜ 待建 |
-| **Phase 4** | 话术自优化（复盘建议 → 人工确认 → 更新话术） | A | ⬜ 待建 |
-| **Phase 5** | 用户数据导入（CSV + CRM 直连） | B | ⬜ 待建 |
-| **Phase 5** | RFM 评分计算引擎（`rfm_service.py`） | B | ⬜ 待建 |
-| **Phase 5** | 6 大群组管理 + 用户运营看板（/audience） | B | ⬜ 待建 |
-| **Phase 5** | 分层触达活动配置（`/audience/campaigns`） | B | ⬜ 待建 |
-| **Phase 5** | 群组批量 Email / SMS 发送 | B | ⬜ 待建 |
-| **Phase 6** | 营销效果追踪（打开率 / 点击率 / 复购率） | B | ⬜ 待建 |
-| **Phase 6** | 流失预警定时任务（每日 RFM 重算 + 群组变动检测） | B | ⬜ 待建 |
-| **Phase 6** | 双线统一 Dashboard（获客漏斗 + RFM 健康度） | 共用 | ⬜ 待建 |
+| **Phase 4** | 邮件回复 Webhook 解析 + AI 自动建议（`analyze_reply()`） | A | ✅ 完成 |
+| **Phase 4** | UTM 注册链接生成 + 事件回传 | A | ✅ 完成 |
+| **Phase 4** | 话术自优化（复盘建议 → 人工确认 → `ScriptVersion` 表） | A | ✅ 完成 |
+| **Phase 5** | 用户数据导入（CSV 解析 + 批量写库） | B | ✅ 完成 |
+| **Phase 5** | RFM 评分计算引擎（`rfm_service.py`，分位数分层） | B | ✅ 完成 |
+| **Phase 5** | 6 大群组管理 + 用户运营看板（/audience） | B | ✅ 完成 |
+| **Phase 5** | 分层触达活动配置（`/audience/campaigns`） | B | ✅ 完成 |
+| **Phase 5** | 群组批量 Email / SMS 发送 | B | ✅ 完成 |
+| **Phase 6** | 营销效果追踪（open/click/reply 写入 AudienceFollowUp） | B | ✅ 完成 |
+| **Phase 6** | 流失预警定时任务（APScheduler 每日 00:05 RFM 重算） | B | ✅ 完成 |
+| **Phase 6** | 双线统一 Dashboard（`GET /api/v1/dashboard/stats`） | 共用 | ✅ 完成 |
 
 ---
 

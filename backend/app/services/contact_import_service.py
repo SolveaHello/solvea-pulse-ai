@@ -25,13 +25,38 @@ def _find_column(df: pd.DataFrame, aliases: list[str]) -> str | None:
 
 
 def normalize_phone(raw: str, default_region: str = "US") -> str | None:
-    """Normalize a phone number string to E.164 format."""
+    """
+    Normalize a phone number string to E.164 format.
+
+    Special case — French numbers (country code +33):
+    The local format in France starts with 0 (e.g. 06 71 95 05 48).
+    Standard E.164 strips that leading 0, producing +33671950548.
+    However Vapi expects the full subscriber number including the leading 0,
+    so French numbers must be kept as +330XXXXXXXXX (11 digits after +33).
+
+    Example:
+        Input:  "0671950548"  (local FR)  or  "+33671950548"  (standard E.164)
+        Output: "+330671950548"  (Vapi-compatible FR format)
+    """
     try:
         parsed = phonenumbers.parse(str(raw), default_region)
-        if phonenumbers.is_valid_number(parsed):
-            return phonenumbers.format_number(
-                parsed, phonenumbers.PhoneNumberFormat.E164
-            )
+        if not phonenumbers.is_valid_number(parsed):
+            return None
+
+        e164 = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
+
+        # French numbers: country code 33, subscriber number must retain leading 0
+        # Standard E.164 (+33671950548, 12 chars) → Vapi format (+330671950548, 13 chars)
+        if parsed.country_code == 33:
+            national = phonenumbers.format_number(
+                parsed, phonenumbers.PhoneNumberFormat.NATIONAL
+            ).replace(" ", "").replace("-", "").replace(".", "")
+            # National format in France always starts with 0 (e.g. 0671950548)
+            if national.startswith("0"):
+                return f"+33{national}"  # e.g. +330671950548
+
+        return e164
+
     except phonenumbers.NumberParseException:
         pass
     return None

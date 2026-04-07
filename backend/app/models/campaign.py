@@ -252,6 +252,22 @@ class FollowUp(Base):
     call: Mapped["Call | None"] = relationship("Call", back_populates="follow_ups")
 
 
+class ScriptVersion(Base):
+    """Versioned history of campaign scripts. Active version is what the AI uses."""
+    __tablename__ = "script_versions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    campaign_id: Mapped[str] = mapped_column(String, ForeignKey("campaigns.id"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    script: Mapped[str] = mapped_column(String, nullable=False)
+    change_summary: Mapped[str | None] = mapped_column(String, nullable=True)  # what changed
+    ai_suggestions: Mapped[dict | None] = mapped_column(JSON, nullable=True)   # raw Claude output
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    approved_by: Mapped[str | None] = mapped_column(String, nullable=True)     # user_id who approved
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class DailyReport(Base):
     __tablename__ = "daily_reports"
 

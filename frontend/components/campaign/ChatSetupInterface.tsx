@@ -148,14 +148,15 @@ export function ChatSetupInterface() {
               const data = JSON.parse(line.slice(2));
 
               if (data.showCard) {
-                setMessages((prev) => [
-                  ...prev,
-                  {
-                    kind: "card",
-                    cardType: data.showCard.type as CardMessage["cardType"],
-                    confirmed: false,
-                  },
-                ]);
+                const cardType = data.showCard.type as CardMessage["cardType"];
+                setMessages((prev) => {
+                  // Guard: never insert a duplicate card of the same type
+                  const alreadyExists = prev.some(
+                    (m) => m.kind === "card" && m.cardType === cardType
+                  );
+                  if (alreadyExists) return prev;
+                  return [...prev, { kind: "card", cardType, confirmed: false }];
+                });
               }
 
               if (data.campaignExtraction) {

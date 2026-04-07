@@ -1,8 +1,8 @@
-# Pulse AI — 产品需求文档 (PRD)
+# Pulse AI — AI 驱动客户全生命周期管理平台
 
-> **版本**：v1.0  
-> **日期**：2026-03-31  
-> **状态**：草稿  
+> **版本**：v2.1  
+> **日期**：2026-04-01  
+> **状态**：迭代中  
 
 ---
 
@@ -82,11 +82,11 @@ Pulse AI 是一个面向**销售团队与用户运营团队**的 AI 驱动客户
 
 ## 二、流程架构
 
-### 2.1 主流程（6 步闭环）
+### 2.1 主流程（Line A 外呼获客线，7 步闭环）
 
 ```
-STEP 1  →  STEP 2  →  STEP 3A/3B  →  STEP 4  →  STEP 5  →  STEP 6
-采集        配置         外呼+邮件      跟进        复盘        转化
+STEP 1  →  STEP 2  →  STEP 3A/3B  →  STEP 4  →  STEP 5  →  STEP 6  →  STEP 7
+采集        配置         外呼+邮件     查看详情    二次跟进     线索转化    复盘报告
 ```
 
 ### 2.2 流程详述
@@ -100,49 +100,57 @@ STEP 1  →  STEP 2  →  STEP 3A/3B  →  STEP 4  →  STEP 5  →  STEP 6
 
 #### STEP 2 — 定义外呼任务（Campaign 配置）
 
-- 人工填写 Campaign 目标、话术脚本
-- 配置 AI Agent 参数：语气（professional/friendly）、语速、语言
-- 设置并发数上限（1-10）和外呼时间窗口
+- AI 对话引导 + MapSearchCard 一站式配置：联络文件 + 外呼号码 + 活动目标 + 执行时间
+- 配置 AI Agent 参数：语气（professional/friendly/casual/energetic）、语速、语音、开场白
+- 设置并发数上限（1-10）和外呼时间窗口（遵守 TCPA 09:00-18:00 本地时区）
 - 配置自动跟进触发条件（哪些 Disposition 触发 Email/SMS）
 - 人工审批后 Campaign 状态变更为 `CONFIGURED`，可启动外呼
 
 #### STEP 3A — AI 外呼
 
-- Vapi AI 按并发限制批量外呼联系人
+- Vapi AI 按并发限制批量外呼联系人（max 10）
 - 实时 SSE 推送通话状态到前端
 - 通话结束后自动：录音上传 S3、转录文本、Claude 生成摘要
-- Sentiment 分析 → 自动打 Disposition 标签（6 种）
+- Sentiment 分析 → 自动打 Disposition 标签，置信度 < 0.6 时降级为 `CALLED`
 
 #### STEP 3B — Email Blast
 
 - 对 `ContactList` 中有邮箱的联系人并发发送营销邮件
-- Claude 基于联系人信息生成个性化邮件内容
+- Claude 基于联系人行业 / 地区 / 简介生成个性化内容
 - 通过 Resend API 发送，结果写入 `FollowUp` 表
 
-#### STEP 4 — 智能二次跟进
+#### STEP 4 — 查看活动详情（Campaign Detail Page）
 
-| 触发条件 | 自动动作 |
-|---------|---------|
-| `INTERESTED` | 24h 内发跟进邮件 |
-| `CALLBACK_REQUESTED` | 发邮件 + SMS |
-| `VOICEMAIL` | 发邮件 + SMS |
+- `/campaigns/:id` 展示统计概览：总外呼数、接通率、INTERESTED 数、今日成本、Disposition 分布
+- 通话记录列表：外呼号码、开始时间、通话时长、通话状态、Disposition Badge、任务结果
+- 通话详情展开：录音播放（进度条 + 下载）、挂断原因、通话摘要、Key Points、完整转录
+- 行内操作：Confirm Lead / Reject / Send Follow-up
+
+#### STEP 5 — 智能二次跟进
+
+| 触发条件 | 延迟 | 渠道 |
+|---------|------|------|
+| `INTERESTED` | 24h 后 | Email |
+| `CALLBACK_REQUESTED` | 立即 | Email + SMS |
+| `VOICEMAIL` | 立即 | Email + SMS |
 
 - Email 内容由 Claude 基于通话摘要生成
-- SMS 为简短行动号召（Twilio 发送）
+- SMS 为简短行动号召（Twilio 发送，遵守 TCPA / 10DLC）
 - 收到回复或点击后：人工标记 `CONFIRMED` 或 `NOT_INTERESTED`
+- 点击取消订阅链接 → 自动标记 `DNC`
 
-#### STEP 5 — 每日复盘报告
+#### STEP 6 — 线索确认与销售转化
+
+- `CONFIRMED` 线索推入销售工作台（`/leads`）
+- 销售查看线索详情（通话录音 + 摘要 + 邮件往来）
+- 销售完成对接后标记 `CONVERTED`；可 Reassign 给其他销售代表
+- 注册链接带 UTM 参数追踪，注册事件回传 → 自动 `CONVERTED`（Phase 4 待建）
+
+#### STEP 7 — 每日复盘报告
 
 - 每日 00:00 自动生成，或手动触发
-- 统计指标：外呼数、接通率、有效对话率、INTERESTED 率、跟进转化率、Email 打开率、成本
+- 统计 7 项指标：外呼数、接通率、有效对话率、INTERESTED 率、跟进转化率、Email 打开率、成本
 - Claude 生成「今日洞察 + 明日建议」自然语言摘要
-
-#### STEP 6 — 线索分配与注册转化
-
-- `CONFIRMED` 线索自动推入销售工作台
-- 销售查看线索详情（通话录音 + 摘要 + 邮件往来）
-- 销售完成对接后标记 `CONVERTED`
-- 注册链接带 UTM 参数追踪，注册事件回传 → 自动 `CONVERTED`
 
 ---
 
@@ -203,6 +211,7 @@ STEP 1  →  STEP 2  →  STEP 3A/3B  →  STEP 4  →  STEP 5  →  STEP 6
 - 电话号码统一标准化为 E.164 格式（`+1XXXXXXXXXX`）
 - 同一电话号码在同一 Campaign 中只允许出现一次
 - `source` 字段区分来源：`GOOGLE_MAPS` / `CSV_IMPORT` / `MANUAL`
+- **法国号码特殊规则**：Vapi 对 E.164 国际号码会去掉本地前导 `0`，但法国（`+33`）国家码后的 `0` 必须保留。系统在存储和传递给 Vapi 前强制校验：法国号码应为 13 位（`+33` + 10 位），标准 E.164 的 12 位格式（`+33` + 9 位）会自动补回前导 `0`，确保格式为 `+330XXXXXXXXX`（如 `+330671950548`）
 
 ### 4.2 Campaign 管理模块
 
@@ -521,17 +530,19 @@ INTERESTED → CONFIRMED → CONVERTED → 注册
 
 ### 7.1 页面导航
 
-| 页面 | 路径 | 主要功能 |
-|------|------|---------|
-| Dashboard | `/` | 7 个指标卡 + 漏斗图 + 近期活动 |
-| 活动列表 | `/campaigns` | 所有活动，状态筛选，一键启动/暂停 |
-| 新建活动 | `/campaigns/new` | 3 步 Wizard：基础信息 → 话术配置 → 外呼参数 |
-| 活动详情 | `/campaigns/:id` | 统计概览 + 联系人列表 + 实时状态 |
-| 通话记录 | `/campaigns/:id/calls` | 录音播放 + 转录展开 + Disposition 筛选 |
-| 线索管理 | `/leads` | 4 列看板（INTERESTED/CONFIRMED/CONVERTED/注册） |
-| 跟进记录 | `/followups` | Email/SMS 发送历史，状态追踪 |
-| 每日报告 | `/reports` | 报告列表 + 指标图表 + AI 洞察文本 |
-| 设置 | `/settings` | API Keys / 电话号码 / Google Calendar OAuth |
+| 页面 | 路径 | 主要功能 | 所属线 |
+|------|------|---------|-------|
+| Dashboard | `/` | 7 个指标卡 + 漏斗图 + 近期活动 | 共用 |
+| 活动列表 | `/campaigns` | 所有活动，状态筛选，一键启动/暂停 | 获客线 |
+| 新建活动 | `/campaigns/new` | AI 对话引导 → MapSearch → 一站式配置卡片 | 获客线 |
+| **活动详情** | `/campaigns/:id` | 统计概览 + 通话记录列表（录音/转录/挂断原因） + 行内操作 | 获客线 |
+| 通话记录 | `/campaigns/:id/calls` | 录音播放 + 转录展开 + Disposition 筛选 | 获客线 |
+| 线索管理 | `/leads` | INTERESTED/CONFIRMED/CONVERTED 看板 + 分配 + Reassign | 获客线 |
+| 跟进记录 | `/followups` | Email/SMS 发送历史，打开率，回复内容 | 共用 |
+| 用户运营 | `/audience` | RFM 分层看板 + 群组管理（Phase 5 待建） | 运营线 |
+| RFM 活动 | `/audience/campaigns` | 分层触达活动配置与执行（Phase 5 待建） | 运营线 |
+| 每日报告 | `/reports` | 报告列表 + 指标图表 + AI 洞察文本 | 共用 |
+| 设置 | `/settings` | API Keys / 电话号码 / Google Calendar OAuth / 邮件域名 | 共用 |
 
 ### 7.2 Dashboard 关键指标卡片
 
@@ -549,14 +560,14 @@ INTERESTED → CONFIRMED → CONVERTED → 注册
 ### 7.3 线索管理看板
 
 ```
-INTERESTED(42)   CONFIRMED(18)   CONVERTED(7)   注册(3)
-┌────────────┐   ┌────────────┐  ┌───────────┐  ┌──────────┐
-│ 商家 A     │   │ 商家 D     │  │ 商家 G    │  │ 商家 J   │
-│ NYC Nails  │   │ LA Salon   │  │ Nail Pro  │  │ NailBar  │
-│ 📞 摘要    │   │ 分配: John │  │ 已成交    │  │ 已注册   │
-│ [Confirm]  │   │ [Convert]  │  │           │  │          │
-│ [Reject]   │   │ [Reject]   │  │           │  │          │
-└────────────┘   └────────────┘  └───────────┘  └──────────┘
+INTERESTED(42)   CONFIRMED(18)   CONVERTED(7)
+┌────────────┐   ┌────────────┐  ┌───────────┐
+│ 商家 A     │   │ 商家 D     │  │ 商家 G    │
+│ NYC Nails  │   │ LA Salon   │  │ Nail Pro  │
+│ 📞 摘要    │   │ 分配: John │  │ 已成交    │
+│ [Confirm]  │   │ [Convert]  │  │           │
+│ [Reject]   │   │ [Reassign] │  │           │
+└────────────┘   └────────────┘  └───────────┘
 ```
 
 ---
@@ -616,35 +627,29 @@ INTERESTED(42)   CONFIRMED(18)   CONVERTED(7)   注册(3)
 
 ## 十、实施计划
 
-### Phase 1 — 核心跟进闭环 ✅ 已完成
-
-- Email 跟进服务（Resend + Claude）
-- SMS 跟进服务（Twilio）
-- Contact 模型扩展（CONFIRMED/CONVERTED）
-- Webhook 自动触发跟进
-
-### Phase 2 — 复盘报告 ✅ 已完成
-
-- 每日报告定时任务
-- 7 项指标统计 + Claude 洞察
-- 漏斗可视化
-
-### Phase 3 — 线索分配 ✅ 已完成
-
-- 销售工作台 `/leads`
-- confirm / convert / reject 操作
-- 通话摘要 + 跟进记录展开
-
-### Phase 4 — 待建（优先级排序）
-
-| # | 功能 | 价值 | 复杂度 | 建议周期 |
-|---|------|------|-------|---------|
-| 1 | 邮件回复 Webhook 解析 | 高 | 中 | Sprint 1 |
-| 2 | AI 自动建议 confirm/reject | 高 | 低 | Sprint 1 |
-| 3 | UTM 注册链接生成 | 高 | 低 | Sprint 2 |
-| 4 | 注册事件回传 | 高 | 中 | Sprint 2 |
-| 5 | 转化漏斗图表（完整） | 中 | 中 | Sprint 3 |
-| 6 | 话术自优化（人工确认后更新） | 中 | 高 | Sprint 4 |
+| Phase | 功能模块 | 所属线 | 状态 |
+|-------|---------|-------|------|
+| **Phase 1** | AI 外呼 + 录音 + 转录 + 摘要 + Disposition 打标 | A | ✅ 完成 |
+| **Phase 1** | Email 跟进（Resend + Claude） | A | ✅ 完成 |
+| **Phase 1** | SMS 跟进（Twilio） | A | ✅ 完成 |
+| **Phase 2** | 每日复盘报告（定时 + 手动 + Claude 洞察） | 共用 | ✅ 完成 |
+| **Phase 2** | 转化漏斗可视化 | A | ✅ 完成 |
+| **Phase 3** | 线索管理工作台 `/leads` | A | ✅ 完成 |
+| **Phase 3** | 销售人员分配（AssignLeadModal） | A | ✅ 完成 |
+| **Phase 3** | CONVERTED 线索重新分配（Reassign） | A | ✅ 完成 |
+| **Phase 3** | Campaign 详情页（概览 + 通话记录列表） | A | ✅ 完成 |
+| **Phase 3** | 通话详情展开（录音 + 转录 + 挂断原因） | A | ✅ 完成 |
+| **Phase 4** | 邮件回复 Webhook 解析 + AI 自动建议 | A | ✅ 完成 |
+| **Phase 4** | UTM 注册链接生成 + 事件回传 | A | ✅ 完成 |
+| **Phase 4** | 话术自优化（复盘建议 → 人工确认 → 更新话术） | A | ✅ 完成 |
+| **Phase 5** | 用户数据导入（CSV + CRM 直连） | B | ✅ 完成 |
+| **Phase 5** | RFM 评分计算引擎 | B | ✅ 完成 |
+| **Phase 5** | 6 大群组管理 + 用户运营看板 `/audience` | B | ✅ 完成 |
+| **Phase 5** | 分层触达活动配置 `/audience/campaigns` | B | ✅ 完成 |
+| **Phase 5** | 群组批量 Email / SMS 发送 | B | ✅ 完成 |
+| **Phase 6** | 营销效果追踪（打开率 / 点击率 / 复购率） | B | ✅ 完成 |
+| **Phase 6** | 流失预警定时任务（每日 RFM 重算） | B | ✅ 完成 |
+| **Phase 6** | 双线统一 Dashboard | 共用 | ✅ 完成 |
 
 ---
 

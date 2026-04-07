@@ -14,6 +14,30 @@ VAPI_BASE = "https://api.vapi.ai"
 MAX_CONCURRENT_CALLS = 10
 
 
+def _prepare_phone_for_vapi(phone: str) -> str:
+    """
+    Ensure the phone number is in the correct format for Vapi.
+
+    Vapi processes international E.164 numbers and may strip the leading 0
+    from the subscriber number for certain countries. French numbers are a
+    known case: the national format retains a leading 0 (e.g. 06 71 95 05 48)
+    which must be preserved in the number passed to Vapi as +330671950548.
+
+    Rule: French numbers (+33) must have 13 characters total (+33 + 10 digits).
+    If a French number arrives as standard E.164 (+33 + 9 digits = 12 chars),
+    the leading 0 was stripped and must be re-inserted.
+
+    Examples:
+        "+33671950548"  (12 chars, leading 0 stripped) → "+330671950548"
+        "+330671950548" (13 chars, already correct)    → "+330671950548"
+    """
+    if phone.startswith("+33") and len(phone) == 12:
+        # Standard E.164 stripped the leading 0: +33 + 9 digits → restore to +33 + 10 digits
+        subscriber = phone[3:]  # 9-digit part after +33
+        return f"+330{subscriber}"
+    return phone
+
+
 def _headers() -> dict:
     return {
         "Authorization": f"Bearer {settings.VAPI_API_KEY}",
@@ -67,7 +91,7 @@ async def create_call(
     payload: dict[str, Any] = {
         "assistantId": assistant_id,
         "phoneNumberId": phone_number_id,
-        "customer": {"number": customer_phone},
+        "customer": {"number": _prepare_phone_for_vapi(customer_phone)},
     }
     if customer_name:
         payload["customer"]["name"] = customer_name

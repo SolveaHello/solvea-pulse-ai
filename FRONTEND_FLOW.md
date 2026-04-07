@@ -1,3 +1,4 @@
+# Pulse AI — AI 驱动客户全生命周期管理平台  
 # 前端设计流程（React + Vite）
 
 > **系统**：Pulse AI  
@@ -49,10 +50,13 @@ pulse-ai-frontend/
     │   ├── DashboardPage.tsx          # /
     │   ├── CampaignsPage.tsx          # /campaigns
     │   ├── NewCampaignPage.tsx        # /campaigns/new
+    │   ├── CampaignDetailPage.tsx     # /campaigns/:id  ← 活动详情（概览+通话记录）
     │   ├── CampaignCallsPage.tsx      # /campaigns/:id/calls
     │   ├── LeadsPage.tsx              # /leads
     │   ├── FollowupsPage.tsx          # /followups
     │   ├── ReportsPage.tsx            # /reports
+    │   ├── AudiencePage.tsx           # /audience        ← Line B RFM 看板（Phase 5）
+    │   ├── AudienceCampaignsPage.tsx  # /audience/campaigns ← 分层触达活动（Phase 5）
     │   ├── SettingsPage.tsx           # /settings
     │   └── TeamPage.tsx               # /team
     │
@@ -65,13 +69,11 @@ pulse-ai-frontend/
     │   │   ├── steps/
     │   │   │   ├── SearchContactsStep.tsx
     │   │   │   ├── SetGoalStep.tsx
-    │   │   │   ├── SetOutboundNumberStep.tsx
     │   │   │   ├── AgentConfigStep.tsx
     │   │   │   ├── ContactsReviewStep.tsx
     │   │   │   └── ReviewStep.tsx
     │   │   └── cards/
-    │   │       ├── MapSearchCard.tsx
-    │   │       └── OutboundNumberCard.tsx
+    │   │       └── MapSearchCard.tsx  # 两阶段卡片（搜索+Setup，含外呼号/目标/时间）
     │   ├── calls/
     │   │   ├── CallDetailRow.tsx
     │   │   ├── CallSummaryCard.tsx
@@ -136,10 +138,13 @@ pulse-ai-frontend/
         <Route path="/"                          element={<DashboardPage />} />
         <Route path="/campaigns"                 element={<CampaignsPage />} />
         <Route path="/campaigns/new"             element={<NewCampaignPage />} />
+        <Route path="/campaigns/:id"             element={<CampaignDetailPage />} />
         <Route path="/campaigns/:id/calls"       element={<CampaignCallsPage />} />
         <Route path="/leads"                     element={<LeadsPage />} />
         <Route path="/followups"                 element={<FollowupsPage />} />
         <Route path="/reports"                   element={<ReportsPage />} />
+        <Route path="/audience"                  element={<AudiencePage />} />         {/* Phase 5 */}
+        <Route path="/audience/campaigns"        element={<AudienceCampaignsPage />} /> {/* Phase 5 */}
         <Route path="/settings"                  element={<SettingsPage />} />
         <Route path="/team"                      element={<TeamPage />} />
       </Route>
@@ -275,24 +280,31 @@ useCallStatus(campaignId, (event) => {
 ```
 campaignSetup store（src/stores/campaignSetup.ts）
 ─────────────────────────────────────────────────
-step: "search-contacts" | "set-goal" | "set-outbound-number"
-    | "agent-config" | "contacts" | "review"
+state: {
+  selectedContacts: MockBusiness[]   // 用户勾选的商家列表
+  outboundPhone:    string           // 外呼号码
+  campaignGoal:     string           // 活动目标
+  scheduleAt:       string | null    // null = 立即执行
+  agentConfig:      AgentConfig
+  script:           string
+}
 
 CampaignWizard.tsx（根据 step 渲染对应步骤组件）
 │
-├─ SearchContactsStep
-│     → 输入关键词 → POST /api/v1/contacts/search/google-maps
-│     → 展示结果 → 勾选 → store.setSelectedContacts()
-│     → 下一步
-│
-├─ SetGoalStep
-│     → 填写名称 + 目标 → store.setCampaignName/setCampaignGoal()
-│
-├─ SetOutboundNumberStep
-│     → 选择已验证的外呼号码 → store.setOutboundPhone()
+├─ MapSearchCard（两阶段）
+│     ── Phase 1: 搜索阶段
+│         → 输入关键词 → POST /api/v1/contacts/search/google-maps（模拟）
+│         → 展示 20 条 Mock 商家列表（名称 / 电话 / 邮件 / 评分 / 简介）
+│         → 勾选目标商家 → 点击 "Next"
+│     ── Phase 2: Setup 阶段（Campaign 配置一站式卡片）
+│         → 联系人预览表格 + [Download CSV] 按钮
+│         → 外呼号码输入框 → store.setOutboundPhone()
+│         → 活动目标 Textarea → store.setCampaignGoal()
+│         → 外呼时间：立即 / 预约（日期时间选择）→ store.setScheduleAt()
+│         → 点击 "Confirm & Continue" → handleMapConfirm(MapConfirmData)
 │
 ├─ AgentConfigStep
-│     → 语气 / 语速 / voice provider / 话术脚本
+│     → 语气 / 语速 / voice provider / 音色 / 开场白 / 话术脚本
 │     → store.setAgentConfig() + store.setScript()
 │
 ├─ ContactsReviewStep
@@ -300,12 +312,27 @@ CampaignWizard.tsx（根据 step 渲染对应步骤组件）
 │     → 最终联系人预览（去重后数量）
 │
 └─ ReviewStep
-      → 汇总展示所有配置
+      → 汇总展示：联系人数 + 外呼号 + 活动目标 + 执行时间 + Agent 配置
       → 点击「创建活动」
       → POST /api/v1/campaigns（含 contacts 批量）
-      → 成功 → navigate("/campaigns/:id/calls")
+      → 成功 → navigate("/campaigns/:id")
       → store.reset()
 ```
+
+### MapConfirmData 类型
+
+```typescript
+// src/components/campaign/cards/MapSearchCard.tsx
+export interface MapConfirmData {
+  contacts:      MockBusiness[];   // 勾选的商家列表
+  outboundPhone: string;           // 外呼号码
+  objective:     string;           // 活动目标
+  scheduleAt:    string | null;    // ISO 时间字符串 or null（立即执行）
+}
+```
+
+> **架构说明**：原独立步骤 `SetOutboundNumberStep` 已合并进 MapSearchCard Phase 2，
+> 外呼号码 / 目标 / 时间在同一张卡片内完成配置，减少步骤跳转摩擦。
 
 ---
 
@@ -342,10 +369,30 @@ Vapi ──► POST /api/v1/webhooks/vapi（直接回调 FastAPI 8000 端口）
 
 ## 十、待接入项
 
+### Phase 4（获客线增强）
+
 | 功能 | 位置 | 说明 |
 |------|------|------|
 | Dashboard 真实数据 | `DashboardPage.tsx` | 接 `GET /api/v1/dashboard/stats`（后端待建） |
 | 团队管理 | `TeamPage.tsx` | 接 `GET /api/v1/team/members`（后端待建） |
-| 邮件回复解析 | 后端 Webhook | Phase 4 — Resend Inbound Webhook |
+| 邮件回复解析 | 后端 Webhook | Phase 4 — Resend Inbound Webhook + AI 意向分析 |
 | UTM 注册链接 | `LeadsPage.tsx` | Phase 4 — `/leads/:id/registration-link` |
-| 注册事件回传 | 后端 Webhook | Phase 4 |
+| 注册事件回传 | 后端 Webhook | Phase 4 — 注册 → 自动 CONVERTED |
+| 话术自优化 | `ReportsPage.tsx` | Phase 4 — 复盘建议 → 人工确认 → 更新 Script |
+
+### Phase 5（用户运营线 Line B）
+
+| 功能 | 位置 | 说明 |
+|------|------|------|
+| RFM 看板 | `AudiencePage.tsx` | 6 大群组卡片 + 用户数 + 触达按钮 |
+| 群组管理 | `AudiencePage.tsx` | 阈值配置、用户列表、手动调整群组 |
+| 分层触达活动 | `AudienceCampaignsPage.tsx` | 选群组 → Claude 生成内容 → Email/SMS 发送 |
+| 用户数据导入 | `AudiencePage.tsx` | CSV 上传 / CRM 直连配置 |
+
+### Phase 6（效果追踪）
+
+| 功能 | 位置 | 说明 |
+|------|------|------|
+| 营销效果报告 | `ReportsPage.tsx` | 群组维度打开率 / 复购率 / 群组流转分析 |
+| 流失预警提醒 | `DashboardPage.tsx` | At Risk / Can't Lose 预警卡片 |
+| 双线统一 Dashboard | `DashboardPage.tsx` | 获客漏斗 + RFM 健康度并排展示 |

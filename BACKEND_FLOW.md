@@ -1,3 +1,4 @@
+# Pulse AI — AI 驱动客户全生命周期管理平台  
 # 后端设计流程
 
 > **框架**：FastAPI (Python) + SQLAlchemy (Async ORM)  
@@ -25,19 +26,22 @@ backend/app/
 │   ├── contacts.py                 # 联系人导入 + 列表
 │   ├── webhooks.py                 # Vapi / Resend / Twilio Webhook 处理
 │   ├── followups.py                # 跟进记录 CRUD + 手动触发
-│   ├── leads.py                    # 线索列表 + confirm/convert/reject
+│   ├── leads.py                    # 线索列表 + confirm/convert/reject/reassign
 │   ├── reports.py                  # 报告生成 + 列表
-│   └── google_calendar.py          # OAuth2 鉴权 + 日历操作
+│   ├── google_calendar.py          # OAuth2 鉴权 + 日历操作
+│   └── audience.py                 # Line B：RFM 群组管理（Phase 5 待建）
 │
 ├── services/                       # 业务逻辑层
 │   ├── vapi_service.py             # Vapi REST 封装 + 并发外呼编排
+│   │                               #   _prepare_phone_for_vapi(): 法国号末尾保护
 │   ├── claude_service.py           # Anthropic API（摘要/邮件内容/洞察）
 │   ├── email_service.py            # Resend API + 邮件内容生成
 │   ├── sms_service.py              # Twilio SMS
 │   ├── google_maps_service.py      # Google Places API
 │   ├── google_calendar_service.py  # Google Calendar API
-│   ├── contact_import_service.py   # CSV 解析 + 批量写库
-│   └── report_service.py           # 指标聚合 + Claude 洞察生成
+│   ├── contact_import_service.py   # CSV 解析 + 批量写库（含法国号特殊处理）
+│   ├── report_service.py           # 指标聚合 + Claude 洞察生成
+│   └── rfm_service.py              # RFM 评分计算引擎（Phase 5 待建）
 │
 ├── schemas/                        # Pydantic 请求/响应 Schema（待补充）
 │
@@ -112,6 +116,7 @@ User
 | POST | `/api/v1/leads/:id/confirm` | → CONFIRMED + assignedTo |
 | POST | `/api/v1/leads/:id/convert` | → CONVERTED |
 | POST | `/api/v1/leads/:id/reject` | → NOT_INTERESTED |
+| POST | `/api/v1/leads/:id/reassign` | 重新分配销售代表（更新 assignedTo） |
 
 ### FollowUps  `/api/v1/followups`
 
@@ -269,7 +274,9 @@ routers/
 
 ---
 
-## 六、待建模块（Phase 4）
+## 六、待建模块
+
+### Phase 4 — 获客线增强
 
 | 模块 | 文件位置 | 说明 |
 |------|---------|------|
@@ -279,3 +286,44 @@ routers/
 | 注册事件回传 | `routers/webhooks.py` 增加 `/webhooks/registration` | 注册事件 → Contact.disposition = CONVERTED |
 | 定时任务调度 | `main.py` 增加 APScheduler lifespan | 每日 00:00 自动调用 report_service |
 | 话术版本管理 | `models/campaign.py` 增加 `ScriptVersion` 表 | 保存历史版本，人工确认后激活 |
+
+### Phase 5 — 用户运营线 Line B
+
+| 模块 | 文件位置 | 说明 |
+|------|---------|------|
+| AudienceUser 模型 | `models/audience.py` 新建 | 存量用户表：user_id / last_purchase_date / total_orders / total_spent / segment |
+| RFM 评分引擎 | `services/rfm_service.py` 新建 | 按分位数计算 R/F/M 得分，自动归入 6 大群组 |
+| Line B 路由 | `routers/audience.py` 新建 | `GET /api/v1/audience/segments`、`POST /api/v1/audience/import` |
+| 分层触达活动 | `routers/audience.py` + `services/email_service.py` | 按 RFM 群组批量发 Email / SMS（含 rfm_segment 字段） |
+| CSV 用户导入 | `services/contact_import_service.py` 扩展 | 解析行为数据字段，写入 AudienceUser |
+
+### Phase 6 — 效果追踪
+
+| 模块 | 文件位置 | 说明 |
+|------|---------|------|
+| 营销效果追踪 | `routers/reports.py` 扩展 | 群组维度打开率 / 点击率 / 复购率聚合 |
+| 流失预警定时任务 | `main.py` APScheduler 扩展 | 每日 00:00 重算 RFM → 检测群组下滑 → 触发预警 |
+| 双线 Dashboard 统计 | `routers/dashboard.py` 新建 | `GET /api/v1/dashboard/stats` 合并 Line A 漏斗 + Line B RFM 健康度 |
+
+---
+
+## 七、电话号码标准化说明
+
+### 法国号码特殊规则（`vapi_service.py` + `contact_import_service.py`）
+
+```
+问题：Vapi 对 E.164 国际号码会去掉本地前导 0。
+      法国号码（+33）国家码后的 0 必须保留，否则无法拨出。
+
+标准 E.164（12位）：+33671950548   ← 前导 0 被去除，错误
+Vapi 要求（13位）： +330671950548  ← 前导 0 保留，正确
+
+两层保护机制：
+  1. contact_import_service.py → normalize_phone()
+       导入时处理：phonenumbers NATIONAL 格式保留前导 0
+       保证写入 DB 的法国号格式为 +330XXXXXXXXX
+
+  2. vapi_service.py → _prepare_phone_for_vapi()
+       调用时最后防线：若传入 +33 + 9位（12字符），自动补回前导 0
+       保证历史存量数据也能正确传给 Vapi API
+```

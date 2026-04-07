@@ -133,6 +133,48 @@ async def reject_lead(contact_id: str, db: AsyncSession = Depends(get_db)):
     return _serialize_contact(contact)
 
 
+@router.patch("/{contact_id}/reassign")
+async def reassign_lead(contact_id: str, body: dict, db: AsyncSession = Depends(get_db)):
+    """Reassign a CONFIRMED/CONVERTED lead to a different sales rep."""
+    result = await db.execute(select(Contact).where(Contact.id == contact_id))
+    contact = result.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    assigned_to = body.get("assignedTo")
+    if not assigned_to:
+        raise HTTPException(status_code=400, detail="assignedTo is required")
+
+    contact.assigned_to = assigned_to
+    await db.commit()
+    await db.refresh(contact)
+    return _serialize_contact(contact)
+
+
+@router.get("/{contact_id}/registration-link")
+async def get_registration_link(
+    contact_id: str,
+    campaign_id: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate a UTM-tagged registration link for a confirmed lead."""
+    result = await db.execute(select(Contact).where(Contact.id == contact_id))
+    contact = result.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    from app.config import settings
+    base_url = getattr(settings, "APP_BASE_URL", "https://app.pulseai.com")
+    link = (
+        f"{base_url}/register"
+        f"?utm_source=pulse_ai"
+        f"&utm_medium=outbound"
+        f"&utm_campaign={campaign_id}"
+        f"&contact_id={contact_id}"
+    )
+    return {"registrationLink": link, "contactId": contact_id}
+
+
 def _serialize_contact(c: Contact) -> dict:
     return {
         "id": c.id,

@@ -1,13 +1,14 @@
 """
-Vapi.ai webhook event processor.
-Called by the Next.js BFF after signature validation.
-Handles: transcript-ready, recording-ready, function-call (calendar booking)
+Webhook event processors for Vapi, Resend, Twilio, and registration.
+- Vapi: call transcript/recording/function-call events
+- Resend: email status tracking + inbound reply parsing
+- Registration: UTM conversion tracking → auto-CONVERTED
 """
 
 import uuid
 import httpx
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -17,7 +18,7 @@ from app.models.campaign import (
     FollowUp, FollowUpChannel, FollowUpStatus, Contact,
 )
 from app.models.user import User
-from app.services.claude_service import summarize_call, detect_language, translate_to_english
+from app.services.claude_service import summarize_call, detect_language, translate_to_english, analyze_reply
 from app.services.google_calendar_service import get_next_available_slot, create_event
 from app.services.email_service import generate_email_content, send_email
 from app.services.sms_service import send_follow_up_sms
@@ -333,6 +334,108 @@ async def _trigger_auto_followup(call: Call, db: AsyncSession):
 
     except Exception as e:
         print(f"[webhooks] Auto follow-up failed for call {call.id}: {e}")
+
+
+@router.post("/resend")
+async def resend_webhook(event: dict, db: AsyncSession = Depends(get_db)):
+    """Handle Resend email status + inbound reply webhooks."""
+    event_type = event.get("type")
+    data = event.get("data", {})
+    email_id = data.get("email_id") or event.get("email_id")
+
+    if not email_id:
+        return {"ok": True}
+
+    # Find follow-up by Resend email ID (stored in subject or via metadata)
+    # Resend sends email_id in the webhook payload, match to our FollowUp records
+    result = await db.execute(
+        select(FollowUp).where(FollowUp.resend_email_id == email_id)
+            if hasattr(FollowUp, "resend_email_id")
+            else select(FollowUp).where(FollowUp.id == email_id)
+    )
+    followup = result.scalar_one_or_none()
+
+    if event_type == "email.opened" and followup:
+        followup.opened_at = datetime.utcnow()
+        if followup.status == FollowUpStatus.SENT:
+            followup.status = FollowUpStatus.SENT  # keep SENT, just record open time
+        await db.commit()
+
+    elif event_type == "email.clicked" and followup:
+        followup.clicked_at = datetime.utcnow() if hasattr(followup, "clicked_at") else None
+        await db.commit()
+
+    elif event_type == "inbound.email":
+        # Parse inbound reply
+        reply_text = data.get("text") or data.get("html_stripped") or ""
+        from_email = data.get("from", {}).get("email", "") if isinstance(data.get("from"), dict) else data.get("from", "")
+        subject = data.get("subject", "")
+
+        # Find contact by email
+        contact_result = await db.execute(
+            select(Contact).where(Contact.email == from_email)
+        )
+        contact = contact_result.scalar_one_or_none()
+
+        if contact and reply_text:
+            # Use Claude to analyze reply intent
+            try:
+                analysis = await analyze_reply(reply_text, subject)
+                intent = analysis.get("intent", "more_info")
+                suggestion = analysis.get("suggestion", "followup")
+
+                # Update the matching follow-up record
+                fu_result = await db.execute(
+                    select(FollowUp)
+                    .where(FollowUp.contact_id == contact.id)
+                    .where(FollowUp.channel == FollowUpChannel.EMAIL)
+                    .order_by(FollowUp.sent_at.desc())
+                    .limit(1)
+                )
+                latest_fu = fu_result.scalar_one_or_none()
+                if latest_fu:
+                    latest_fu.reply_content = reply_text
+                    latest_fu.replied_at = datetime.utcnow()
+                    latest_fu.status = FollowUpStatus.REPLIED
+                    latest_fu.reply_intent = intent
+                    latest_fu.reply_suggestion = suggestion
+
+                # Auto-update disposition on high-confidence confirm/reject
+                confidence = analysis.get("confidence", 0)
+                if confidence >= 0.8:
+                    if suggestion == "confirm":
+                        contact.disposition = Disposition.CONFIRMED
+                        contact.confirmed_at = datetime.utcnow()
+                    elif suggestion == "reject":
+                        contact.disposition = Disposition.NOT_INTERESTED
+
+                await db.commit()
+            except Exception as e:
+                print(f"[webhooks/resend] reply analysis failed: {e}")
+
+    return {"ok": True}
+
+
+@router.post("/registration")
+async def registration_webhook(event: dict, db: AsyncSession = Depends(get_db)):
+    """
+    Handle registration events from the product — auto-mark contact as CONVERTED.
+    Expected payload: { contact_id, campaign_id, utm_source }
+    """
+    contact_id = event.get("contact_id")
+    if not contact_id:
+        raise HTTPException(status_code=400, detail="contact_id required")
+
+    result = await db.execute(select(Contact).where(Contact.id == contact_id))
+    contact = result.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    contact.disposition = Disposition.CONVERTED
+    contact.converted_at = datetime.utcnow()
+    await db.commit()
+
+    return {"ok": True, "contactId": contact_id, "disposition": "CONVERTED"}
 
 
 async def _archive_recording_to_s3(

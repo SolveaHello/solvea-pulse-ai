@@ -1,10 +1,11 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import uuid
 from app.db.database import get_db
-from app.models.campaign import Campaign, Contact, ContactList, Call, CallStatus, Disposition
+from app.models.campaign import Campaign, Contact, ContactList, Call, CallStatus, Disposition, ScriptVersion
 from app.services.vapi_service import create_assistant, batch_create_calls
 from app.utils.sse_manager import sse_manager
 
@@ -118,6 +119,122 @@ async def start_batch_calls(
     )
 
     return {"queued": len(contacts), "campaignId": campaign_id}
+
+
+@router.post("/{campaign_id}/script-insights")
+async def generate_script_insights(
+    campaign_id: str,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Use AI to analyze script performance and suggest improvements.
+    Returns suggestions; human must approve before script is updated.
+    """
+    result = await db.execute(select(Campaign).where(Campaign.id == campaign_id))
+    campaign = result.scalar_one_or_none()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    report_stats = body.get("reportStats", {})
+    from app.services.claude_service import generate_script_insights as _gen_insights
+    suggestions = await _gen_insights(campaign.script, report_stats, campaign.name)
+
+    return {"campaignId": campaign_id, "currentScript": campaign.script, "suggestions": suggestions}
+
+
+@router.post("/{campaign_id}/script-approve")
+async def approve_script_update(
+    campaign_id: str,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Human approves a suggested script update. Creates a ScriptVersion record
+    and applies the new script to the campaign.
+    """
+    result = await db.execute(select(Campaign).where(Campaign.id == campaign_id))
+    campaign = result.scalar_one_or_none()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    new_script = body.get("newScript")
+    if not new_script:
+        raise HTTPException(status_code=400, detail="newScript is required")
+
+    approved_by = body.get("approvedBy", "unknown")
+    change_summary = body.get("changeSummary", "Script updated based on AI recommendations")
+    ai_suggestions = body.get("aiSuggestions")
+
+    # Get next version number
+    ver_result = await db.execute(
+        select(ScriptVersion)
+        .where(ScriptVersion.campaign_id == campaign_id)
+        .order_by(ScriptVersion.version.desc())
+        .limit(1)
+    )
+    latest = ver_result.scalar_one_or_none()
+    next_version = (latest.version + 1) if latest else 1
+
+    # Archive old script
+    old_version = ScriptVersion(
+        id=str(uuid.uuid4()),
+        campaign_id=campaign_id,
+        version=next_version - 1 if next_version > 1 else 0,
+        script=campaign.script,
+        change_summary="Previous version archived",
+        is_active=False,
+    )
+    db.add(old_version)
+
+    # Save new version as active
+    new_version = ScriptVersion(
+        id=str(uuid.uuid4()),
+        campaign_id=campaign_id,
+        version=next_version,
+        script=new_script,
+        change_summary=change_summary,
+        ai_suggestions=ai_suggestions,
+        is_active=True,
+        approved_by=approved_by,
+        approved_at=datetime.utcnow(),
+    )
+    db.add(new_version)
+
+    # Update live script
+    campaign.script = new_script
+    await db.commit()
+
+    return {
+        "campaignId": campaign_id,
+        "version": next_version,
+        "script": new_script,
+        "approvedBy": approved_by,
+    }
+
+
+@router.get("/{campaign_id}/script-versions")
+async def list_script_versions(campaign_id: str, db: AsyncSession = Depends(get_db)):
+    """List all script versions for a campaign."""
+    result = await db.execute(
+        select(ScriptVersion)
+        .where(ScriptVersion.campaign_id == campaign_id)
+        .order_by(ScriptVersion.version.desc())
+    )
+    versions = result.scalars().all()
+    return [
+        {
+            "id": v.id,
+            "version": v.version,
+            "script": v.script,
+            "changeSummary": v.change_summary,
+            "isActive": v.is_active,
+            "approvedBy": v.approved_by,
+            "approvedAt": v.approved_at.isoformat() if v.approved_at else None,
+            "createdAt": v.created_at.isoformat(),
+        }
+        for v in versions
+    ]
 
 
 @router.get("/{campaign_id}/sse")
