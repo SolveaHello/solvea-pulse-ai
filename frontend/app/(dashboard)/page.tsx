@@ -1,11 +1,21 @@
 "use client";
 
-import { FormEvent, useMemo, useRef, useState } from "react";
-import { Bot, FileSpreadsheet, Loader2, SendHorizonal, UserRound } from "lucide-react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Bot,
+  ExternalLink,
+  Eye,
+  FileSpreadsheet,
+  Loader2,
+  SendHorizonal,
+  UserRound,
+  X,
+} from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { Components } from "react-markdown";
+import * as XLSX from "xlsx";
 
 type ChatMessage = {
   id: string;
@@ -13,25 +23,59 @@ type ChatMessage = {
   content: string;
 };
 
-const CSV_PATH_RE =
-  /(https?:\/\/[^\s)\]]+\.csv|\/[\w./-]+\.csv|(?:\.\.?\/)?[\w./-]+\.csv)/gi;
+type HistoryMessage = {
+  role: "user" | "assistant" | string;
+  content: string;
+  timestamp?: string;
+};
 
-function looksLikeCsvPath(value: string | undefined): boolean {
-  if (!value) {
-    return false;
+type SpreadsheetType = "csv" | "xlsx" | "xls";
+
+const SPREADSHEET_EXT_RE = "(?:csv|xlsx|xls)";
+const SPREADSHEET_PATH_RE = new RegExp(
+  String.raw`(?:https?:\/\/|file:\/\/|\.{1,2}\/|~\/|\/|[A-Za-z]:[\\/]|(?:[\w.-]+[\\/]))[^\s<>"'` + "`" + String.raw`]*?\.(${SPREADSHEET_EXT_RE})(?:[?#][^\s<>"'` + "`" + String.raw`]*)?`,
+  "gi"
+);
+
+function cleanFilePath(raw: string | undefined): string {
+  if (!raw) {
+    return "";
   }
-  return /\.csv(?:$|[?#])/i.test(value);
+
+  let value = raw.trim();
+  value = value.replace(/^[`'"([{<]+/, "");
+  value = value.replace(/[`'"\])}>]+$/, "");
+  value = value.replace(/[，。；、,;!]+$/, "");
+
+  return value;
 }
 
-function normalizeCsvLinks(markdown: string): string {
-  return markdown.replace(CSV_PATH_RE, (match) => {
-    const clean = match.trim();
-    if (!looksLikeCsvPath(clean)) {
+function getSpreadsheetType(value: string | undefined): SpreadsheetType | null {
+  const clean = cleanFilePath(value);
+  if (!clean) {
+    return null;
+  }
+
+  const match = clean.match(/\.(csv|xlsx|xls)(?:$|[?#])/i);
+  if (!match) {
+    return null;
+  }
+
+  return match[1].toLowerCase() as SpreadsheetType;
+}
+
+function normalizeSpreadsheetLinks(markdown: string): string {
+  return markdown.replace(SPREADSHEET_PATH_RE, (match, _ext, offset = 0, full = "") => {
+    const clean = cleanFilePath(match);
+    if (!getSpreadsheetType(clean)) {
       return match;
     }
 
-    // Keep existing markdown links unchanged.
-    if (match.includes("](")) {
+    const before = full.slice(Math.max(0, offset - 2), offset);
+    const after = full.slice(offset + match.length, offset + match.length + 1);
+
+    // Keep existing markdown link target unchanged: [label](path.csv)
+    if (before === "](" && after === ")") {
       return match;
     }
 
@@ -39,44 +83,83 @@ function normalizeCsvLinks(markdown: string): string {
   });
 }
 
-function CsvFileCard({ href, label }: { href: string; label: string }) {
+function SpreadsheetFileCard({
+  href,
+  label,
+  fileType,
+  onPreview,
+}: {
+  href: string;
+  label: string;
+  fileType: SpreadsheetType;
+  onPreview: (href: string, label: string, fileType: SpreadsheetType) => void;
+}) {
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="my-2 flex max-w-full items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-900 no-underline transition hover:border-emerald-300 hover:bg-emerald-100"
-    >
+    <div className="my-2 flex max-w-full items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-900 no-underline">
       <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-white">
         <FileSpreadsheet className="h-4 w-4" />
       </span>
-      <span className="min-w-0">
-        <span className="block text-xs font-medium uppercase tracking-wide text-emerald-700">CSV File</span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-xs font-medium uppercase tracking-wide text-emerald-700">{fileType} File</span>
         <span className="block truncate text-sm font-medium">{label}</span>
       </span>
-    </a>
+      <button
+        type="button"
+        onClick={() => onPreview(href, label, fileType)}
+        className="inline-flex h-8 items-center gap-1 rounded-md border border-emerald-300 bg-white px-2.5 text-xs font-medium text-emerald-800 transition hover:bg-emerald-100"
+      >
+        <Eye className="h-3.5 w-3.5" />
+        预览
+      </button>
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex h-8 items-center gap-1 rounded-md border border-emerald-300 bg-white px-2.5 text-xs font-medium text-emerald-800 transition hover:bg-emerald-100"
+      >
+        <ExternalLink className="h-3.5 w-3.5" />
+        打开
+      </a>
+    </div>
   );
 }
 
-const markdownComponents: Components = {
-  a: ({ href, children }) => {
-    const label = Array.isArray(children)
-      ? children.map((child) => (typeof child === "string" ? child : "")).join("")
-      : typeof children === "string"
-        ? children
-        : href || "";
+function createMarkdownComponents(
+  onPreview: (href: string, label: string, fileType: SpreadsheetType) => void
+): Components {
+  return {
+    a: ({ href, children }) => {
+      const cleanHref = cleanFilePath(href);
+      const label = Array.isArray(children)
+        ? children.map((child) => (typeof child === "string" ? child : "")).join("")
+        : typeof children === "string"
+          ? children
+          : cleanHref || "";
 
-    if (looksLikeCsvPath(href) || looksLikeCsvPath(label)) {
-      return <CsvFileCard href={href || label} label={label || href || "CSV file"} />;
-    }
+      const cleanLabel = cleanFilePath(label);
+      const hrefType = getSpreadsheetType(cleanHref);
+      const labelType = getSpreadsheetType(cleanLabel);
+      const fileType = hrefType || labelType;
 
-    return (
-      <a href={href} target="_blank" rel="noreferrer">
-        {children}
-      </a>
-    );
-  },
-};
+      if (fileType) {
+        return (
+          <SpreadsheetFileCard
+            href={cleanHref || cleanLabel}
+            label={cleanLabel || cleanHref || "Spreadsheet file"}
+            fileType={fileType}
+            onPreview={onPreview}
+          />
+        );
+      }
+
+      return (
+        <a href={cleanHref || href} target="_blank" rel="noreferrer">
+          {children}
+        </a>
+      );
+    },
+  };
+}
 
 function extractAssistantText(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") {
@@ -120,10 +203,89 @@ export default function DashboardPage() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(querySessionId);
   const [error, setError] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewTitle, setPreviewTitle] = useState("");
+  const [previewType, setPreviewType] = useState<SpreadsheetType | null>(null);
+  const [previewRows, setPreviewRows] = useState<string[][]>([]);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const listRef = useRef<HTMLDivElement>(null);
 
   const hasMessages = useMemo(() => messages.length > 0, [messages.length]);
+
+  const markdownComponents = useMemo(
+    () => createMarkdownComponents(handlePreviewOpen),
+    []
+  );
+
+  useEffect(() => {
+    if (!querySessionId) {
+      return;
+    }
+
+    const targetSessionId = querySessionId;
+
+    let cancelled = false;
+
+    async function loadHistory() {
+      setHistoryLoading(true);
+      setError(null);
+
+      try {
+        const res = await fetch(
+          `/api/solveakit/sessions/${encodeURIComponent(targetSessionId)}`
+        );
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data?.details || data?.error || "加载历史失败");
+        }
+
+        const data = (await res.json()) as {
+          session_id?: string;
+          messages?: HistoryMessage[];
+        };
+
+        if (cancelled) {
+          return;
+        }
+
+        const history = Array.isArray(data.messages)
+          ? data.messages
+              .filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
+              .map((m, idx) => ({
+                id: `history-${idx}`,
+                role: m.role as "user" | "assistant",
+                content: m.content,
+              }))
+          : [];
+
+        setSessionId(data.session_id ?? targetSessionId);
+        setMessages(history);
+        setTimeout(scrollToBottom, 0);
+      } catch (historyError) {
+        if (cancelled) {
+          return;
+        }
+
+        setError(
+          historyError instanceof Error ? historyError.message : "加载历史失败"
+        );
+      } finally {
+        if (!cancelled) {
+          setHistoryLoading(false);
+        }
+      }
+    }
+
+    void loadHistory();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [querySessionId]);
 
   function scrollToBottom() {
     const node = listRef.current;
@@ -144,6 +306,58 @@ export default function DashboardPage() {
     params.set("session_id", nextSessionId);
     const nextUrl = `/?${params.toString()}`;
     router.replace(nextUrl, { scroll: false });
+  }
+
+  async function handlePreviewOpen(
+    href: string,
+    label: string,
+    fileType: SpreadsheetType
+  ) {
+    setPreviewOpen(true);
+    setPreviewTitle(label);
+    setPreviewType(fileType);
+    setPreviewRows([]);
+    setPreviewError(null);
+    setPreviewLoading(true);
+
+    try {
+      const absoluteUrl = new URL(href, window.location.origin).toString();
+      const res = await fetch(absoluteUrl);
+
+      if (!res.ok) {
+        throw new Error(`预览加载失败 (${res.status})`);
+      }
+
+      const arrayBuffer = await res.arrayBuffer();
+      const workbook = XLSX.read(arrayBuffer, { type: "array" });
+      const firstSheetName = workbook.SheetNames[0];
+
+      if (!firstSheetName) {
+        throw new Error("文件中没有可用的工作表");
+      }
+
+      const sheet = workbook.Sheets[firstSheetName];
+      const rawRows = XLSX.utils.sheet_to_json<(string | number | boolean | null)[]>(
+        sheet,
+        {
+          header: 1,
+          blankrows: false,
+          defval: "",
+        }
+      );
+
+      const normalized = rawRows
+        .slice(0, 30)
+        .map((row) => row.slice(0, 12).map((cell) => String(cell ?? "")));
+
+      setPreviewRows(normalized);
+    } catch (loadError) {
+      setPreviewError(
+        loadError instanceof Error ? loadError.message : "文件预览失败"
+      );
+    } finally {
+      setPreviewLoading(false);
+    }
   }
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
@@ -345,7 +559,7 @@ export default function DashboardPage() {
                       remarkPlugins={[remarkGfm]}
                       components={markdownComponents}
                     >
-                      {normalizeCsvLinks(m.content)}
+                      {normalizeSpreadsheetLinks(m.content)}
                     </ReactMarkdown>
                   </div>
                 ) : (
@@ -360,6 +574,15 @@ export default function DashboardPage() {
               <div className="inline-flex items-center gap-2 rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs text-cyan-700">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 AI 正在思考...
+              </div>
+            </div>
+          ) : null}
+
+          {historyLoading ? (
+            <div className="flex justify-start">
+              <div className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs text-amber-700">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                正在加载历史对话...
               </div>
             </div>
           ) : null}
@@ -378,11 +601,11 @@ export default function DashboardPage() {
               onChange={(e) => setInput(e.target.value)}
               placeholder="输入你的问题..."
               className="h-11 flex-1 rounded-xl border border-slate-200 bg-white px-4 text-sm outline-none ring-cyan-400 transition focus:ring-2"
-              disabled={isStreaming}
+              disabled={isStreaming || historyLoading}
             />
             <button
               type="submit"
-              disabled={!input.trim() || isStreaming}
+              disabled={!input.trim() || isStreaming || historyLoading}
               className="inline-flex h-11 items-center gap-2 rounded-xl bg-cyan-600 px-4 text-sm font-medium text-white transition hover:bg-cyan-700 disabled:cursor-not-allowed disabled:bg-cyan-300"
             >
               <SendHorizonal className="h-4 w-4" />
@@ -391,6 +614,68 @@ export default function DashboardPage() {
           </form>
         </footer>
       </div>
+
+      {previewOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="max-h-[85vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <div>
+                <p className="text-xs uppercase tracking-wide text-slate-500">
+                  {previewType ? `${previewType} preview` : "file preview"}
+                </p>
+                <h3 className="max-w-[70vw] truncate text-sm font-semibold text-slate-900">
+                  {previewTitle}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewOpen(false)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:bg-slate-100"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="max-h-[70vh] overflow-auto p-4">
+              {previewLoading ? (
+                <div className="flex items-center gap-2 text-sm text-slate-500">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  正在解析文件...
+                </div>
+              ) : null}
+
+              {previewError ? (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {previewError}
+                </div>
+              ) : null}
+
+              {!previewLoading && !previewError ? (
+                previewRows.length > 0 ? (
+                  <table className="min-w-full border-collapse text-sm">
+                    <tbody>
+                      {previewRows.map((row, rowIdx) => (
+                        <tr key={`${rowIdx}-${row.join("|")}`} className="odd:bg-slate-50">
+                          {row.map((cell, colIdx) => (
+                            <td
+                              key={`${rowIdx}-${colIdx}`}
+                              className="max-w-[220px] border border-slate-200 px-2 py-1 align-top text-slate-700"
+                            >
+                              <div className="line-clamp-3 break-words">{cell}</div>
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <p className="text-sm text-slate-500">文件为空或暂无可展示数据。</p>
+                )
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
