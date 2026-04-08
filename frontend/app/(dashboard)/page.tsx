@@ -1,15 +1,81 @@
 "use client";
 
 import { FormEvent, useMemo, useRef, useState } from "react";
-import { Bot, Loader2, SendHorizonal, UserRound } from "lucide-react";
+import { Bot, FileSpreadsheet, Loader2, SendHorizonal, UserRound } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useRouter, useSearchParams } from "next/navigation";
+import type { Components } from "react-markdown";
 
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+};
+
+const CSV_PATH_RE =
+  /(https?:\/\/[^\s)\]]+\.csv|\/[\w./-]+\.csv|(?:\.\.?\/)?[\w./-]+\.csv)/gi;
+
+function looksLikeCsvPath(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  return /\.csv(?:$|[?#])/i.test(value);
+}
+
+function normalizeCsvLinks(markdown: string): string {
+  return markdown.replace(CSV_PATH_RE, (match) => {
+    const clean = match.trim();
+    if (!looksLikeCsvPath(clean)) {
+      return match;
+    }
+
+    // Keep existing markdown links unchanged.
+    if (match.includes("](")) {
+      return match;
+    }
+
+    return `[${clean}](${clean})`;
+  });
+}
+
+function CsvFileCard({ href, label }: { href: string; label: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="my-2 flex max-w-full items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-900 no-underline transition hover:border-emerald-300 hover:bg-emerald-100"
+    >
+      <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-white">
+        <FileSpreadsheet className="h-4 w-4" />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-xs font-medium uppercase tracking-wide text-emerald-700">CSV File</span>
+        <span className="block truncate text-sm font-medium">{label}</span>
+      </span>
+    </a>
+  );
+}
+
+const markdownComponents: Components = {
+  a: ({ href, children }) => {
+    const label = Array.isArray(children)
+      ? children.map((child) => (typeof child === "string" ? child : "")).join("")
+      : typeof children === "string"
+        ? children
+        : href || "";
+
+    if (looksLikeCsvPath(href) || looksLikeCsvPath(label)) {
+      return <CsvFileCard href={href || label} label={label || href || "CSV file"} />;
+    }
+
+    return (
+      <a href={href} target="_blank" rel="noreferrer">
+        {children}
+      </a>
+    );
+  },
 };
 
 function extractAssistantText(payload: unknown): string | null {
@@ -275,7 +341,12 @@ export default function DashboardPage() {
                 </span>
                 {m.role === "assistant" ? (
                   <div className="chat-markdown text-sm leading-6 [&_a]:text-cyan-700 [&_a]:underline [&_code]:rounded [&_code]:bg-slate-100 [&_code]:px-1 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-slate-900 [&_pre]:p-3 [&_pre]:text-slate-100 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p:not(:first-child)]:mt-2">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={markdownComponents}
+                    >
+                      {normalizeCsvLinks(m.content)}
+                    </ReactMarkdown>
                   </div>
                 ) : (
                   <p className="whitespace-pre-wrap text-sm leading-6">{m.content}</p>
