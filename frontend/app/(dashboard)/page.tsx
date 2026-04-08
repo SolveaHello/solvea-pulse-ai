@@ -31,11 +31,25 @@ type HistoryMessage = {
 
 type SpreadsheetType = "csv" | "xlsx" | "xls";
 
-const SPREADSHEET_EXT_RE = "(?:csv|xlsx|xls)";
-const SPREADSHEET_PATH_RE = new RegExp(
-  String.raw`(?:https?:\/\/|file:\/\/|\.{1,2}\/|~\/|\/|[A-Za-z]:[\\/]|(?:[\w.-]+[\\/]))[^\s<>"'` + "`" + String.raw`]*?\.(${SPREADSHEET_EXT_RE})(?:[?#][^\s<>"'` + "`" + String.raw`]*)?`,
-  "gi"
-);
+const SPREADSHEET_PATH_RE =
+  /(?:https?:\/\/|file:\/\/|\.{1,2}\/|~\/|\/|[A-Za-z]:[\\/]|(?:[\w.-]+[\\/]))[^\s<>"'`]*?\.(?:csv|xlsx|xls)(?:[?#][^\s<>"'`]*)?/gi;
+
+function toPreviewApiUrl(rawPath: string): string {
+  return `/api/solveakit/file-preview?path=${encodeURIComponent(rawPath)}`;
+}
+
+function resolveSpreadsheetHref(rawHref: string): string {
+  const clean = cleanFilePath(rawHref);
+  if (!clean) {
+    return rawHref;
+  }
+
+  if (/^https?:\/\//i.test(clean) || clean.startsWith("/api/")) {
+    return clean;
+  }
+
+  return toPreviewApiUrl(clean);
+}
 
 function cleanFilePath(raw: string | undefined): string {
   if (!raw) {
@@ -65,7 +79,7 @@ function getSpreadsheetType(value: string | undefined): SpreadsheetType | null {
 }
 
 function normalizeSpreadsheetLinks(markdown: string): string {
-  return markdown.replace(SPREADSHEET_PATH_RE, (match, _ext, offset = 0, full = "") => {
+  return markdown.replace(SPREADSHEET_PATH_RE, (match, offset = 0, full = "") => {
     const clean = cleanFilePath(match);
     if (!getSpreadsheetType(clean)) {
       return match;
@@ -94,6 +108,8 @@ function SpreadsheetFileCard({
   fileType: SpreadsheetType;
   onPreview: (href: string, label: string, fileType: SpreadsheetType) => void;
 }) {
+  const openHref = resolveSpreadsheetHref(href);
+
   return (
     <div className="my-2 flex max-w-full items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-900 no-underline">
       <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-white">
@@ -112,7 +128,7 @@ function SpreadsheetFileCard({
         预览
       </button>
       <a
-        href={href}
+        href={openHref}
         target="_blank"
         rel="noreferrer"
         className="inline-flex h-8 items-center gap-1 rounded-md border border-emerald-300 bg-white px-2.5 text-xs font-medium text-emerald-800 transition hover:bg-emerald-100"
@@ -321,7 +337,8 @@ export default function DashboardPage() {
     setPreviewLoading(true);
 
     try {
-      const absoluteUrl = new URL(href, window.location.origin).toString();
+      const source = resolveSpreadsheetHref(href);
+      const absoluteUrl = new URL(source, window.location.origin).toString();
       const res = await fetch(absoluteUrl);
 
       if (!res.ok) {
@@ -357,6 +374,14 @@ export default function DashboardPage() {
       );
     } finally {
       setPreviewLoading(false);
+    }
+  }
+
+  function safeNormalizeSpreadsheetLinks(content: string): string {
+    try {
+      return normalizeSpreadsheetLinks(content);
+    } catch {
+      return content;
     }
   }
 
@@ -559,7 +584,7 @@ export default function DashboardPage() {
                       remarkPlugins={[remarkGfm]}
                       components={markdownComponents}
                     >
-                      {normalizeSpreadsheetLinks(m.content)}
+                      {safeNormalizeSpreadsheetLinks(m.content)}
                     </ReactMarkdown>
                   </div>
                 ) : (
