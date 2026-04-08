@@ -23,7 +23,7 @@ export default function DashboardLayout({
 
         <nav className="flex-1 p-4 space-y-1">
           <NavItem href="/" icon={<LayoutDashboard className="h-4 w-4" />}>
-            Overview
+            AI Chat
           </NavItem>
           <NavItem href="/campaigns" icon={<Megaphone className="h-4 w-4" />}>
             Campaigns

@@ -2,10 +2,10 @@
 const nextConfig = {
   async rewrites() {
     return [
-      {
-        source: "/backend/:path*",
-        destination: `${process.env.FASTAPI_INTERNAL_URL}/:path*`,
-      },
+      // {
+      //   source: "/backend/:path*",
+      //   destination: `${process.env.FASTAPI_INTERNAL_URL}/:path*`,
+      // },
     ];
   },
 };
