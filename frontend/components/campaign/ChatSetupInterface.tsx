@@ -117,6 +117,7 @@ export function ChatSetupInterface() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let assistantContent = "";
+      let streamBuffer = "";
 
       // Add placeholder assistant message
       const assistantIdx = await new Promise<number>((resolve) => {
@@ -126,50 +127,83 @@ export function ChatSetupInterface() {
         });
       });
 
+      const applyAssistantContent = (nextContent: string) => {
+        setMessages((prev) => {
+          const updated = [...prev];
+          const msg = updated[assistantIdx];
+          if (msg?.kind === "text") {
+            updated[assistantIdx] = { ...msg, content: nextContent };
+          }
+          return updated;
+        });
+      };
+
+      const processLine = (line: string) => {
+        if (line.startsWith("0:")) {
+          try {
+            const text = JSON.parse(line.slice(2));
+            if (typeof text === "string" && text.length > 0) {
+              assistantContent += text;
+              applyAssistantContent(assistantContent);
+            }
+          } catch {
+            // ignore malformed token line
+          }
+          return;
+        }
+
+        if (!line.startsWith("8:")) {
+          return;
+        }
+
+        try {
+          const data = JSON.parse(line.slice(2));
+
+          if (data.showCard) {
+            const cardType = data.showCard.type as CardMessage["cardType"];
+            setMessages((prev) => {
+              // Guard: never insert a duplicate card of the same type
+              const alreadyExists = prev.some(
+                (m) => m.kind === "card" && m.cardType === cardType
+              );
+              if (alreadyExists) return prev;
+              return [...prev, { kind: "card", cardType, confirmed: false }];
+            });
+          }
+
+          if (data.campaignExtraction) {
+            setMessages((prev) => [
+              ...prev,
+              { kind: "extraction", data: data.campaignExtraction },
+            ]);
+          }
+        } catch {
+          // ignore malformed metadata line
+        }
+      };
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const lines = decoder.decode(value).split("\n");
-        for (const line of lines) {
-          if (line.startsWith("0:")) {
-            const text = JSON.parse(line.slice(2));
-            assistantContent += text;
-            setMessages((prev) => {
-              const updated = [...prev];
-              const msg = updated[assistantIdx];
-              if (msg?.kind === "text") {
-                updated[assistantIdx] = { ...msg, content: assistantContent };
-              }
-              return updated;
-            });
-          } else if (line.startsWith("8:")) {
-            try {
-              const data = JSON.parse(line.slice(2));
+        streamBuffer += decoder.decode(value, { stream: true });
+        const lines = streamBuffer.split("\n");
+        streamBuffer = lines.pop() ?? "";
 
-              if (data.showCard) {
-                const cardType = data.showCard.type as CardMessage["cardType"];
-                setMessages((prev) => {
-                  // Guard: never insert a duplicate card of the same type
-                  const alreadyExists = prev.some(
-                    (m) => m.kind === "card" && m.cardType === cardType
-                  );
-                  if (alreadyExists) return prev;
-                  return [...prev, { kind: "card", cardType, confirmed: false }];
-                });
-              }
-
-              if (data.campaignExtraction) {
-                setMessages((prev) => [
-                  ...prev,
-                  { kind: "extraction", data: data.campaignExtraction },
-                ]);
-              }
-            } catch {
-              // ignore
-            }
-          }
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line) continue;
+          processLine(line);
         }
+      }
+
+      streamBuffer += decoder.decode();
+      if (streamBuffer.trim()) {
+        processLine(streamBuffer.trim());
+      }
+
+      if (!assistantContent.trim()) {
+        applyAssistantContent("我收到了你的消息。请再补充一点目标或受众信息，我就能继续帮你配置。");
       }
     } catch {
       setMessages((prev) => [
