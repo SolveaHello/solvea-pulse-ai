@@ -15,22 +15,22 @@ metadata:
 ---
 
 
-# gmaps-leads
+# gmap-contact-info
 
 Search Google Maps for business leads and export to CSV.
 
 ## Usage
 
 ```
-/gmaps-leads <location>, <business type>, <star range>
+/gmap-contact-info <location>, <business type>, <star range>
 ```
 
 ## Examples
 
 ```
-/gmaps-leads New York, hotel, 3~5
-/gmaps-leads 上海, 餐厅, 4~5
-/gmaps-leads London, law firm, 3.5~5
+/gmap-contact-info New York, hotel, 3~5
+/gmap-contact-info 上海, 餐厅, 4~5
+/gmap-contact-info London, law firm, 3.5~5
 ```
 
 ## Instructions
@@ -40,10 +40,10 @@ When this skill is invoked, extract three parameters from the args:
 2. **business type** - type of business to search for
 3. **star range** - rating range in format `min~max` (e.g. `3~5`, `4~5`, `3.5~5`)
 
-Then run the Python script at `~/.claude/skills/gmaps-leads/search.py` with those parameters:
+Then run the Python script at `~/.claude/skills/gmap-contact-info/search.py` with those parameters:
 
 ```bash
-python3 ~/.claude/skills/gmaps-leads/search.py "<location>" "<business type>" <min_stars> <max_stars>
+python3 ~/.claude/skills/gmap-contact-info/search.py "<location>" "<business type>" <min_stars> <max_stars>
 ```
 
 The script will:
