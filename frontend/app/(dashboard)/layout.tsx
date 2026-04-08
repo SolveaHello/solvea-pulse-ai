@@ -26,7 +26,7 @@ export default function DashboardLayout({
             AI Chat
           </NavItem>
           <NavItem href="/campaigns" icon={<Megaphone className="h-4 w-4" />}>
-            Campaigns
+            Sessions
           </NavItem>
 
           <div className="pt-3 pb-1">

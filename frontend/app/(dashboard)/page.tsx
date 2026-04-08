@@ -4,6 +4,7 @@ import { FormEvent, useMemo, useRef, useState } from "react";
 import { Bot, Loader2, SendHorizonal, UserRound } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useRouter, useSearchParams } from "next/navigation";
 
 type ChatMessage = {
   id: string;
@@ -44,10 +45,14 @@ function extractAssistantText(payload: unknown): string | null {
 }
 
 export default function DashboardPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const querySessionId = searchParams.get("session_id");
+
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(querySessionId);
   const [error, setError] = useState<string | null>(null);
 
   const listRef = useRef<HTMLDivElement>(null);
@@ -60,6 +65,19 @@ export default function DashboardPage() {
       return;
     }
     node.scrollTop = node.scrollHeight;
+  }
+
+  function applySessionId(nextSessionId: string | null | undefined) {
+    if (!nextSessionId || nextSessionId === sessionId) {
+      return;
+    }
+
+    setSessionId(nextSessionId);
+
+    const params = new URLSearchParams(window.location.search);
+    params.set("session_id", nextSessionId);
+    const nextUrl = `/?${params.toString()}`;
+    router.replace(nextUrl, { scroll: false });
   }
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
@@ -108,7 +126,7 @@ export default function DashboardPage() {
         const data = await res.json();
         const text = extractAssistantText(data) || "";
 
-        setSessionId(data?.session_id ?? sessionId);
+        applySessionId(data?.session_id);
         setMessages((prev) =>
           prev.map((m) => (m.id === assistantId ? { ...m, content: text } : m))
         );
@@ -150,7 +168,7 @@ export default function DashboardPage() {
               session_id?: string;
             };
             if (typeof parsed.session_id === "string") {
-              setSessionId(parsed.session_id);
+              applySessionId(parsed.session_id);
             }
 
             const maybeText = extractAssistantText(parsed);
